@@ -1,0 +1,237 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Kristina Reicher"
+date: "January 14, 2018"
+output:
+pdf_document: default
+html_document: default
+---
+
+
+#Overview
+  
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways:
+
+- exactly according to the specification (Class A)
+- throwing the elbows to the front (Class B)
+- lifting the dumbbell only halfway (Class C)
+- lowering the dumbbell only halfway (Class D) 
+- throwing the hips to the front (Class E).
+
+
+##Data
+
+The training data for this project are available here:
+  
+  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+  
+  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. 
+
+
+##Assignment
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+
+#Data Processing
+
+
+##Loading the data
+
+The data was downloaded from the link above and saved on local computer (in first command for setting working director one can replace loacal file path with path of folder where the data was downloaded). Then it was loaded on the R using the read.csv command. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(corrplot);
+library(caret);
+library(rattle);
+setwd("C:/Users/Borg/Documents/Coursera/PML/Course_project");
+```
+
+```{r load_dataset, echo=FALSE,cache=TRUE}
+#Train Data
+train.raw <- read.csv("./data/pml-training.csv",header = TRUE, na.strings = c ("","NA"))
+#Test Data
+test.raw <- read.csv("./data/pml-testing.csv",header = TRUE,na.strings = c ("","NA"))
+```
+
+##Examine the data set
+``` {r}
+dim(train.raw) #Dimension
+str(train.raw) #Structure
+
+```
+There is large number of variables that can be considered as ID's (user_name), or contain row numbers (column X). These variables can not be predictors for quality of exercise. Furthermore, columns containing timestamps and the factors new_window and num_window will not be used because they are not related to the type od exercise.
+To easy eliminate variables that I choose to ignore from training dataset, I will create a vector of variable names that will not be used in the model.
+
+``` {r echo=FALSE}
+ignore <-  c("X","cvtd_timestamp","user_name","raw_timestamp_part_1","raw_timestamp_part_2", "new_window", "num_window")
+```
+
+##Checking for missing values
+
+As we can seen in data examination, there are several variables in all instances that are missing, but I will also remove all variables which have more the 70%  of missing values.
+
+``` {r missing-values} 
+vars<-names(train.raw)
+missing.values.count<-sapply(train.raw[vars],function(x)sum(is.na(x)))
+missing.values.varnames<-names(which(missing.values.count>=0.7*nrow(train.raw))) #removing variables with more than 70% of missings
+ignore<-union(ignore,missing.values.varnames)
+length(ignore)
+```
+Only those variables that are not put in ignore vector are retained. 107 variables were manually removed.
+
+``` {r}
+vars.keep <-setdiff(vars,ignore)
+train.clean <- train.raw [,vars.keep]
+dim(train.clean) #Dimension
+```
+
+Training data set now has 53 variables instead of 160 variables that it was having at the beginning of the variable selection process.
+
+# Checking correlations
+
+
+I am using cor function from caret package to find correlations between the variables and removing variables from training dataset that are high correlated.
+
+```{r correlations, echo=FALSE, cache=TRUE}
+library(caret)
+correlations.matrix <- cor(train.clean[,-c(53)]) #all variables except target variable classe
+highlyCorrelated = findCorrelation(correlations.matrix, cutoff=0.75)
+ignore<-union(ignore,names(train.clean)[highlyCorrelated])
+vars.keep<-setdiff(vars, ignore) #removing variables that are high correlated
+```
+
+Final clean data set with 32 variables left:
+``` {r}
+train.clean <- train.raw [,vars.keep]
+dim(train.clean) #Dimension
+str(train.clean) #Structure
+```
+
+Overview of correlations between 32 variables that are in final training data set:
+``` {r}
+library(corrplot);
+correlations <- cor(train.clean[,-c(32)]) #all variables except target variable classe
+corrplot(correlations, type = "upper", order = "hclust", tl.cex = 0.5)
+```         
+
+
+# Partitioning the training dataset
+
+I will create training and testitng partitions of the data set using the createDataPartition funcition from caret packages. Target variable classe is randomly distributed in training and testing data partition preserving class distribution. 70% od the data is used for model training, and 30% for cross validation testing.
+
+``` {r data-partition}
+set.seed(100003)
+inTrain <- createDataPartition(train.clean$classe, p = 0.7, list = FALSE)
+train.data <- train.clean[inTrain, ] # training data set
+test.data <- train.clean[-inTrain, ] # testing data set
+dim(train.data) #Dimension
+dim(test.data) #Dimension
+```
+
+#Building model with machine learning algoritm
+
+In this section I will try predict the outcome with 3 different models, using folowing algorithams for model training:
+  1. classification trees 
+  2. random forest 
+  3. gradient boosting method
+
+
+First, to prevent overfitting and improve the efficicency of the models, one should define the type of cross-validation which will be used. I will use 5 folds (the number of folds depends on the data size, 5 folds means that 20% of the data is used for testing, and our data sets are large enough. By icreasing number of folds on this data sets we can get higher computational times with no significant increase of the accuracy).
+
+```{r echo=TRUE}
+trControl <- trainControl(method="cv", number=5)
+```
+
+## Prediction with classification trees
+
+By using the train() function from the caret package for "rpart" model type I will build the first model, and then print calssification tree as a denogram using the fancyRpartPlot() funcition.
+
+```{r calss-tree-train}
+library(caret)
+set.seed(100003)
+class.tree.model <- train(classe~., data=train.data, method="rpart", trControl=trControl)
+fancyRpartPlot(class.tree.model$finalModel)
+```
+
+Then we validate the model build with classification tree alghoritm on the test set to find out how well it predicts "classe" variable outcome. 
+We looking at the accuracy variable and confusion matrix.
+
+```{r calss-tree-test}
+predict.class.tree.model <- predict(class.tree.model, newdata = test.data)
+cm.class.tree.model <- confusionMatrix(test.data$classe, predict.class.tree.model) 
+cm.class.tree.model$table # confusion matrix
+cm.class.tree.model$overall # model accuracy
+```
+
+The accuracy of this first model is very low (about 52%, which is just a little better than random guessing). 
+
+
+## Prediction with random forest
+
+
+Second model is build with train() function from the caret package for "rf" model type.
+
+```{r random-forest-train}
+library(caret)
+set.seed(100003)
+rand.forest.model <- train(classe~., data=train.data, method="rf", trControl=trControl, verbose=FALSE)
+print(rand.forest.model)
+plot(rand.forest.model,main="Accuracy of Random forest model by number of predictors")
+```
+
+```{r random-forest-test}
+predict.rand.forest.model <- predict(rand.forest.model, newdata = test.data)
+cm.rand.forest.model <- confusionMatrix(test.data$classe, predict.rand.forest.model ) 
+cm.rand.forest.model$table # confusion matrix
+cm.rand.forest.model$overall # model accuracy
+```
+
+The accuracy of the second "random forest" model is 99% which is very good. Two variables are most importance predictoros, and we can try to further reduce the variable set. For learning puprose, I will rather try diferent machine learning alghoritm instead of minimazing set of predictors and build new (minimized) random forest model.
+
+###Compute the variable importance 
+```{r variable-importance}
+most.imp.vars <- varImp(rand.forest.model)
+most.imp.vars
+```
+
+
+## Prediction with Generalized Boosted Regression Models
+
+Third model is build with train function from the caret package for "gbm" model type.
+
+```{r gbm-train}
+library(caret)
+set.seed(100003)
+gbm.model <- train(classe~., data=train.data, method="gbm", trControl=trControl, verbose=FALSE)
+print(gbm.model)
+plot(gbm.model)
+```
+
+```{r gbm-test}
+predict.gbm.model <- predict(gbm.model, newdata = test.data)
+cm.gbm.model <- confusionMatrix(test.data$classe, predict.gbm.model) 
+cm.gbm.model$table # confusion matrix
+cm.gbm.model$overall # model accuracy
+```
+The accuracy of the third "gradient boosting method" model is 95% which is very good, but random forest model is better. 
+
+#Conclusion
+
+This shows that the random forest model is the best one with highest accuracy. I will apply the best model to the validation data and then use it to predict the values of classe for the test data set.
+
+```{r final-predict}
+validation.data <- test.raw
+predict.final <- predict(rand.forest.model,newdata=validation.data)
+predict.final 
+```
+
